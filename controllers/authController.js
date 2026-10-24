@@ -1,63 +1,119 @@
-const bcrypt = require('bcryptjs');
 const { User } = require('../models/User');
+const { LoginCode } = require('../models/LoginCode');
 const { signToken } = require('../utils/token');
-const { validateRegister, validateLogin } = require('../schemas/authSchemas');
 const { apiError } = require('../utils/apiError');
+const { validateEmail, validateCode } = require('../schemas/authSchemas');
+const otp = require('../utils/otp');
+const { sendLoginCode } = require('../services/mailer');
 
-const EMAIL_TAKEN = apiError('email_taken', 'Этот email уже зарегистрирован');
-const INVALID_CREDENTIALS = apiError('invalid_credentials', 'Неверный email или пароль');
-const BCRYPT_ROUNDS = 12;
 const DISPLAY_NAME_MAX_LENGTH = 50;
+const ONE_HOUR_MS = 60 * 60 * 1000;
 
-const DUMMY_HASH = bcrypt.hashSync('dummy-password', BCRYPT_ROUNDS);
-
-async function register(req, res, next) {
+// Шаг 1: отправить код на email.
+// Ответ одинаковый, есть ли пользователь с таким email — не выдаём, кто зарегистрирован.
+async function requestCode(req, res, next) {
   try {
-    const error = validateRegister(req.body);
-    if (error) {
-      return res.status(400).json(error);
+    const { email, error } = validateEmail(req.body?.email);
+    if (error) return res.status(400).json(error);
+
+    const now = Date.now();
+    const record = await LoginCode.findOne({ email });
+    const recentSends = (record?.sentAt ?? [])
+      .map((d) => d.getTime())
+      .filter((t) => now - t < ONE_HOUR_MS);
+
+    const lastSend = recentSends.at(-1);
+    if (lastSend && now - lastSend < otp.RESEND_COOLDOWN_MS) {
+      const seconds = Math.ceil((otp.RESEND_COOLDOWN_MS - (now - lastSend)) / 1000);
+      return res.status(429).json(apiError('code_cooldown', 'Подождите перед новым запросом кода', { seconds }));
+    }
+    if (recentSends.length >= otp.MAX_SENDS_PER_HOUR) {
+      return res.status(429).json(apiError('code_rate_limited', 'Слишком много запросов кода'));
     }
 
-    const { password, displayName } = req.body;
-    const email = req.body.email.trim().toLowerCase();
+    const code = otp.generateCode();
+    await LoginCode.findOneAndUpdate(
+      { email },
+      {
+        email,
+        codeHash: otp.hashCode(email, code),
+        codeExpiresAt: new Date(now + otp.CODE_TTL_MS),
+        attempts: 0,
+        sentAt: [...recentSends, now].slice(-otp.MAX_SENDS_PER_HOUR).map((t) => new Date(t)),
+        expiresAt: new Date(now + otp.RECORD_TTL_MS),
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
 
-    if (await User.exists({ email })) {
-      return res.status(409).json(EMAIL_TAKEN);
+    try {
+      await sendLoginCode(email, code);
+    } catch (mailErr) {
+      console.error('[mail] не удалось отправить код:', mailErr.message);
+      return res.status(502).json(apiError('mail_failed', 'Не удалось отправить код, попробуйте позже'));
     }
 
-    const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-    const name =
-      displayName?.trim() || email.split('@')[0].slice(0, DISPLAY_NAME_MAX_LENGTH);
-    const user = await User.create({ email, password: hash, displayName: name });
-
-    res.status(201).json({ token: signToken(user), user: user.toPublic() });
+    res.json({ ok: true, cooldown: otp.RESEND_COOLDOWN_MS / 1000 });
   } catch (err) {
-
-    if (err.code === 11000) {
-      return res.status(409).json(EMAIL_TAKEN);
-    }
     next(err);
   }
 }
 
-async function login(req, res, next) {
+// Шаг 2: проверить код и выдать токен. Новый email автоматически создаёт аккаунт.
+async function verifyCode(req, res, next) {
   try {
-    const error = validateLogin(req.body);
-    if (error) {
-      return res.status(400).json(error);
+    const { email, error } = validateEmail(req.body?.email);
+    if (error) return res.status(400).json(error);
+
+    const codeError = validateCode(req.body?.code);
+    if (codeError) return res.status(400).json(codeError);
+
+    const record = await LoginCode.findOne({ email });
+    if (!record || !record.codeHash) {
+      return res.status(400).json(apiError('code_expired', 'Срок действия кода истёк'));
+    }
+    if (record.codeExpiresAt.getTime() < Date.now()) {
+      return res.status(400).json(apiError('code_expired', 'Срок действия кода истёк'));
+    }
+    if (record.attempts >= otp.MAX_ATTEMPTS) {
+      return res.status(429).json(apiError('code_attempts_exceeded', 'Слишком много неверных попыток'));
     }
 
-    const email = req.body.email.trim().toLowerCase();
-    const user = await User.findOne({ email }).select('+password');
-    const passwordOk = await bcrypt.compare(req.body.password, user?.password ?? DUMMY_HASH);
-
-    if (!user || !passwordOk) {
-      return res.status(401).json(INVALID_CREDENTIALS);
+    const isValid = otp.safeEqual(record.codeHash, otp.hashCode(email, req.body.code));
+    if (!isValid) {
+      record.attempts += 1;
+      await record.save();
+      const left = otp.MAX_ATTEMPTS - record.attempts;
+      if (left <= 0) {
+        return res.status(429).json(apiError('code_attempts_exceeded', 'Слишком много неверных попыток'));
+      }
+      return res.status(400).json(apiError('code_invalid', 'Неверный код', { left }));
     }
 
+    // Код одноразовый: сразу гасим его
+    record.codeHash = null;
+    record.codeExpiresAt = null;
+    record.attempts = 0;
+    await record.save();
+
+    const user = await findOrCreateUser(email);
     res.json({ token: signToken(user), user: user.toPublic() });
   } catch (err) {
     next(err);
+  }
+}
+
+async function findOrCreateUser(email) {
+  const existing = await User.findOne({ email });
+  if (existing) return existing;
+  try {
+    return await User.create({
+      email,
+      displayName: email.split('@')[0].slice(0, DISPLAY_NAME_MAX_LENGTH),
+    });
+  } catch (err) {
+    // Параллельный вход с тем же email создал пользователя раньше
+    if (err.code === 11000) return User.findOne({ email });
+    throw err;
   }
 }
 
@@ -65,4 +121,4 @@ function me(req, res) {
   res.json({ user: req.user.toPublic() });
 }
 
-module.exports = { register, login, me };
+module.exports = { requestCode, verifyCode, me };

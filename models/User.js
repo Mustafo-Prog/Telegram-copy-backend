@@ -1,9 +1,9 @@
 const mongoose = require('mongoose');
 
+// Вход только по коду из письма, паролей нет
 const userSchema = new mongoose.Schema(
   {
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    password: { type: String, required: true, select: false },
     displayName: { type: String, required: true, trim: true, maxlength: 50 },
   },
   { timestamps: true }

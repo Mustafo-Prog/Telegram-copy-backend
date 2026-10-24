@@ -1,48 +1,26 @@
 const { apiError } = require('../utils/apiError');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const PASSWORD_MIN_LENGTH = 6;
-const PASSWORD_MAX_BYTES = 72;
-const DISPLAY_NAME_MAX_LENGTH = 50;
 
-function isValidEmail(email) {
-  return typeof email === 'string' && email.trim().length <= 254 && EMAIL_RE.test(email.trim());
+function normalizeEmail(email) {
+  return typeof email === 'string' ? email.trim().toLowerCase() : '';
 }
 
-function validateRegister(body) {
-  const { email, password, displayName } = body ?? {};
+// Возвращает нормализованный email или ошибку
+function validateEmail(value) {
+  const email = normalizeEmail(value);
+  if (!email || email.length > 254 || !EMAIL_RE.test(email)) {
+    return { error: apiError('invalid_email', 'Некорректный email') };
+  }
+  return { email };
+}
 
-  if (!isValidEmail(email)) {
-    return apiError('invalid_email', 'Некорректный email');
-  }
-  if (typeof password !== 'string' || password.length < PASSWORD_MIN_LENGTH) {
-    return apiError('password_too_short', `Пароль должен быть не короче ${PASSWORD_MIN_LENGTH} символов`, {
-      min: PASSWORD_MIN_LENGTH,
-    });
-  }
-  if (Buffer.byteLength(password, 'utf8') > PASSWORD_MAX_BYTES) {
-    return apiError('password_too_long', `Пароль слишком длинный (максимум ${PASSWORD_MAX_BYTES} байт)`, {
-      max: PASSWORD_MAX_BYTES,
-    });
-  }
-  if (
-    displayName != null &&
-    (typeof displayName !== 'string' || displayName.trim().length > DISPLAY_NAME_MAX_LENGTH)
-  ) {
-    return apiError('name_invalid', `Имя должно быть строкой не длиннее ${DISPLAY_NAME_MAX_LENGTH} символов`, {
-      max: DISPLAY_NAME_MAX_LENGTH,
-    });
+// Код — ровно 6 цифр
+function validateCode(value) {
+  if (typeof value !== 'string' || !/^\d{6}$/.test(value)) {
+    return apiError('code_invalid', 'Введите 6-значный код', { left: 0 });
   }
   return null;
 }
 
-function validateLogin(body) {
-  const { email, password } = body ?? {};
-
-  if (typeof email !== 'string' || email.trim() === '' || typeof password !== 'string' || password === '') {
-    return apiError('credentials_required', 'Введите email и пароль');
-  }
-  return null;
-}
-
-module.exports = { validateRegister, validateLogin };
+module.exports = { validateEmail, validateCode };
