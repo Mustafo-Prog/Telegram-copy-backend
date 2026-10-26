@@ -17,6 +17,13 @@ function errorHandler(err, _req, res, next) {
     return res.status(400).json(apiError('invalid_data', 'Некорректные данные'));
   }
 
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json(apiError('avatar_too_large', 'Файл больше 2 МБ'));
+  }
+  if (err.apiCode) {
+    return res.status(400).json(apiError(err.apiCode, 'Допустимы только JPEG, PNG или WEBP'));
+  }
+
   console.error(err);
   res.status(500).json(apiError('internal', 'Внутренняя ошибка сервера'));
 }

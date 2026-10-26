@@ -12,11 +12,16 @@ const messageSchema = new mongoose.Schema(
     },
     text: { type: String, required: true, trim: true, maxlength: MESSAGE_MAX_LENGTH },
     sentAt: { type: Date, required: true, default: () => new Date(), immutable: true },
+    // null — сообщение общего чата; иначе — личный диалог
+    conversation: { type: mongoose.Schema.Types.ObjectId, ref: 'Conversation', default: null },
+    // Дата последнего изменения текста; null — сообщение не редактировали
+    editedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
 
 messageSchema.index({ sentAt: -1 });
+messageSchema.index({ conversation: 1, _id: -1 });
 
 const Message = mongoose.model('Message', messageSchema);
 

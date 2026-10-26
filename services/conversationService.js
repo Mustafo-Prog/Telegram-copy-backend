@@ -1,0 +1,183 @@
+const { Conversation } = require('../models/Conversation');
+const { Message } = require('../modules/messages/message.model');
+const { ConversationState } = require('../models/ConversationState');
+const { MessageHide } = require('../models/MessageHide');
+
+const EPOCH = new Date(0);
+
+// Фильтр видимости: сообщения после очистки истории и без тех, что скрыты именно этому пользователю
+async function visibilityFilter(conversationId, userId, before) {
+  const state = await ConversationState.findOne({ conversation: conversationId, user: userId });
+  const hiddenIds = await MessageHide.distinct('message', { conversation: conversationId, user: userId });
+  const idCondition = { $nin: hiddenIds };
+  if (before) idCondition.$lt = before;
+  return { conversation: conversationId, sentAt: { $gt: state?.clearedBefore ?? EPOCH }, _id: idCondition };
+}
+
+// Открыть диалог — значит показать его снова тому, кто его скрыл
+async function unhideFor(conversationId, userId) {
+  await ConversationState.findOneAndUpdate({ conversation: conversationId, user: userId }, { hidden: false }, { upsert: true });
+}
+
+const PAGE_SIZE = 50;
+const PEER_FIELDS = 'displayName username avatarUrl privacy';
+const presence = require('./presence');
+
+function directKeyFor(a, b) {
+  return [String(a), String(b)].sort().join(':');
+}
+
+function openDirectOnce(userId, peerId) {
+  return Conversation.findOneAndUpdate(
+    { directKey: directKeyFor(userId, peerId) },
+    {
+      $setOnInsert: {
+        participants: [userId, peerId],
+        directKey: directKeyFor(userId, peerId),
+        lastMessageAt: new Date(),
+        lastMessageText: '',
+      },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+}
+
+// Два одновременных «написать» могут столкнуться на уникальном directKey — повторяем один раз
+async function findOrCreateDirect(userId, peerId) {
+  try {
+    return await openDirectOnce(userId, peerId);
+  } catch (err) {
+    if (err.code === 11000) return openDirectOnce(userId, peerId);
+    throw err;
+  }
+}
+
+// Последнее сообщение, которое видит именно этот пользователь (учитывает «удалить у меня» и очистку)
+async function previewFor(conversationId, userId) {
+  const filter = await visibilityFilter(conversationId, userId);
+  const last = await Message.findOne(filter).sort({ _id: -1 });
+  return last ? { text: last.text, at: last.sentAt } : { text: '', at: null };
+}
+
+// Ошибка для контроллера: статус и код API
+class ChatGoneError extends Error {
+  constructor() {
+    super('Диалог не найден');
+    this.status = 404;
+    this.code = 'conversation_not_found';
+  }
+}
+
+async function listForUser(userId) {
+  const hiddenIds = await ConversationState.distinct('conversation', { user: userId, hidden: true });
+  return Conversation.find({ participants: userId, _id: { $nin: hiddenIds } })
+    .sort({ lastMessageAt: -1 })
+    .limit(100)
+    .populate('participants', PEER_FIELDS);
+}
+
+// Диалог только для его участников; чужой или несуществующий — null
+async function getForUser(conversationId, userId) {
+  return Conversation.findOne({ _id: conversationId, participants: userId }).populate('participants', PEER_FIELDS);
+}
+
+async function listMessages(conversationId, userId, { before } = {}) {
+  const filter = await visibilityFilter(conversationId, userId, before);
+  const docs = await Message.find(filter)
+    .sort({ _id: -1 })
+    .limit(PAGE_SIZE)
+    .populate('sender', PEER_FIELDS);
+  return docs.reverse();
+}
+
+async function createMessage(conversation, senderId, text) {
+  const message = await Message.create({ sender: senderId, text, conversation: conversation._id });
+  // Диалог могли удалить «у обоих» между проверкой доступа и записью: не оставляем сиротское сообщение
+  if (!(await Conversation.exists({ _id: conversation._id }))) {
+    await Message.deleteOne({ _id: message._id });
+    throw new ChatGoneError();
+  }
+  // Новое сообщение возвращает чат тем, кто его скрыл (история, очищенная ими ранее, не вернётся)
+  await ConversationState.updateMany({ conversation: conversation._id }, { hidden: false });
+  await Conversation.updateOne(
+    { _id: conversation._id },
+    { lastMessageAt: message.sentAt, lastMessageText: text }
+  );
+  return message.populate('sender', PEER_FIELDS);
+}
+
+// Собеседник и превью — свои для каждого участника. Статус собеседника — с учетом его настройки
+function buildConversationDto(conversation, userId, preview) {
+  const peer = conversation.participants.find((p) => String(p._id) !== String(userId));
+  return {
+    id: conversation._id.toString(),
+    peer: peer
+      ? {
+          id: peer._id.toString(),
+          displayName: peer.displayName,
+          username: peer.username ?? null,
+          avatarUrl: peer.avatarUrl ?? null,
+          presence: presence.visibleStatus(peer),
+        }
+      : null,
+    lastMessageText: preview.text,
+    lastMessageAt: (preview.at ?? conversation.createdAt ?? new Date()).toISOString(),
+  };
+}
+
+async function toConversationDto(conversation, userId) {
+  const preview = await previewFor(conversation._id, userId);
+  return buildConversationDto(conversation, userId, preview);
+}
+
+// Список диалогов: состояния и скрытия загружаем одним запросом на всех, а не по диалогу
+async function listDtosForUser(userId) {
+  const docs = await listForUser(userId);
+  if (docs.length === 0) return [];
+  const ids = docs.map((c) => c._id);
+  const states = await ConversationState.find({ conversation: { $in: ids }, user: userId });
+  const hides = await MessageHide.find({ conversation: { $in: ids }, user: userId });
+
+  const stateByConversation = new Map(states.map((st) => [String(st.conversation), st]));
+  const hiddenByConversation = new Map();
+  for (const h of hides) {
+    const key = String(h.conversation);
+    if (!hiddenByConversation.has(key)) hiddenByConversation.set(key, []);
+    hiddenByConversation.get(key).push(String(h.message));
+  }
+
+  return Promise.all(
+    docs.map(async (c) => {
+      const key = String(c._id);
+      const state = stateByConversation.get(key);
+      const last = await Message.findOne({
+        conversation: c._id,
+        sentAt: { $gt: state?.clearedBefore ?? EPOCH },
+        _id: { $nin: hiddenByConversation.get(key) ?? [] },
+      }).sort({ _id: -1 });
+      const preview = last ? { text: last.text, at: last.sentAt } : { text: '', at: null };
+      return buildConversationDto(c, userId, preview);
+    })
+  );
+}
+
+async function getDtoForUser(conversationId, userId) {
+  const doc = await getForUser(conversationId, userId);
+  return doc ? toConversationDto(doc, userId) : null;
+}
+
+module.exports = {
+  PAGE_SIZE,
+  findOrCreateDirect,
+  listForUser,
+  getForUser,
+  listMessages,
+  createMessage,
+  unhideFor,
+  visibilityFilter,
+  toConversationDto,
+  listDtosForUser,
+  getDtoForUser,
+  previewFor,
+  ChatGoneError,
+};
