@@ -20,6 +20,7 @@ function norm(v) {
   return v;
 }
 function eq(value, cond) {
+  if (Array.isArray(value) && Array.isArray(cond)) return value.length === cond.length && value.every((item, index) => eq(item, cond[index]));
   if (Array.isArray(value)) return value.some((v) => eq(v, cond));
   const a = norm(value);
   const b = norm(cond);
@@ -47,7 +48,8 @@ function matchCond(value, cond) {
 function matches(doc, filter) {
   return Object.keys(filter).every((key) => {
     if (key === '$or') return filter.$or.some((f) => matches(doc, f));
-    return matchCond(doc[key], filter[key]);
+    const value = key.split('.').reduce((current, part) => current?.[part], doc);
+    return matchCond(value, filter[key]);
   });
 }
 function cmp(a, b) {
@@ -90,6 +92,7 @@ function applyUpdate(model, d, update, isInsert) {
     if (update.$set) Object.assign(d, update.$set);
     if (isInsert && update.$setOnInsert) Object.assign(d, update.$setOnInsert);
     if (update.$unset) for (const k of Object.keys(update.$unset)) delete d[k];
+    if (update.$inc) for (const [k, value] of Object.entries(update.$inc)) d[k] = (d[k] ?? 0) + value;
     if (update.$max) for (const [k, v] of Object.entries(update.$max)) {
       if (d[k] == null || cmp(norm(d[k]), norm(v)) < 0) d[k] = v;
     }

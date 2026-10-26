@@ -14,6 +14,8 @@ function toMessageDto(message) {
       name: message.attachment.name,
       contentType: message.attachment.contentType,
       size: message.attachment.size,
+      kind: message.attachment.kind ?? 'file',
+      durationMs: message.attachment.durationMs ?? null,
       url: `/messages/${message._id}/attachment`,
     } : null,
   };
@@ -22,6 +24,8 @@ function toMessageDto(message) {
 // Quotes are resolved for the viewer, so hidden or cleared text cannot leak through a reply.
 async function presentMessages(messages, userId) {
   if (!messages.length) return [];
+  const generalReads = require('../../services/generalReadService');
+  const readers = !messages[0].conversation ? await generalReads.latestReaders() : [];
   const ids = [...new Set(messages.filter((m) => m.replyTo).map((m) => String(m.replyTo)))];
   let originals = [];
   if (ids.length) {
@@ -33,6 +37,7 @@ async function presentMessages(messages, userId) {
   const byId = new Map(originals.map((m) => [String(m._id), m]));
   return messages.map((m) => {
     const dto = toMessageDto(m);
+    if (!m.conversation) dto.readByOther = generalReads.wasReadByOther(m, readers);
     if (dto.replyTo) {
       const original = byId.get(dto.replyTo.id);
       dto.replyTo = original ? {

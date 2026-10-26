@@ -13,6 +13,7 @@ router.use(requireAuth);
 router.get('/search', controller.searchUsers);
 router.patch('/me', controller.updateMe);
 router.patch('/me/privacy', controller.updatePrivacy);
+router.patch('/me/general-pin', controller.pinGeneral);
 router.post('/me/avatar', uploadAvatar, controller.uploadMyAvatar);
 router.delete('/me/avatar', controller.removeMyAvatar);
 router.get('/:username', controller.getProfile);

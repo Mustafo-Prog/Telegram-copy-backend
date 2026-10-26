@@ -13,7 +13,8 @@ const messageSchema = new mongoose.Schema(
     text: { type: String, default: '', required() { return !this.attachment; }, trim: true, maxlength: MESSAGE_MAX_LENGTH },
     replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
     attachment: {
-      type: new mongoose.Schema({ name: String, contentType: String, size: Number }, { _id: false }),
+      type: new mongoose.Schema({ name: String, contentType: String, size: Number,
+        kind: { type: String, enum: ['file', 'voice'], default: 'file' }, durationMs: { type: Number, default: null } }, { _id: false }),
       default: null,
     },
     // Binary content is excluded from ordinary queries, DTOs and socket events.

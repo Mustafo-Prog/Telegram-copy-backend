@@ -3,6 +3,7 @@ const multer = require('multer');
 const { Message } = require('../modules/messages/message.model');
 const { detectImageType } = require('./avatarStorage');
 const { validateMessageInput } = require('../modules/messages/message.schema');
+const { detectAudioType } = require('./audioType');
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
@@ -33,6 +34,12 @@ async function prepareContent({ conversationId = null, userId, body, file }) {
   const error = validateMessageInput(body, { hasAttachment: Boolean(file) });
   if (error) throw contentError(400, error.code, error.message);
   const content = { text: (body?.text ?? '').trim(), replyTo: null };
+  const isVoice = body?.voiceDurationMs !== undefined;
+  const durationMs = isVoice ? Number(body.voiceDurationMs) : null;
+  const audioType = file ? detectAudioType(file.buffer, file.mimetype) : null;
+  if (isVoice && (!file || !audioType || !Number.isInteger(durationMs) || durationMs < 1 || durationMs > 180000)) {
+    throw contentError(400, 'voice_invalid', 'Некорректное голосовое сообщение');
+  }
   const replyId = body?.replyToId;
   if (replyId) {
     if (!mongoose.isValidObjectId(replyId)) throw contentError(404, 'reply_not_found', 'Сообщение для ответа недоступно');
@@ -47,8 +54,10 @@ async function prepareContent({ conversationId = null, userId, body, file }) {
     const name = originalName.split(/[\\/]/).at(-1).replace(/[\x00-\x1f\x7f]/g, '').slice(0, 180) || 'file';
     content.attachment = {
       name,
-      contentType: detectImageType(file.buffer) ?? 'application/octet-stream',
+      contentType: detectImageType(file.buffer) ?? audioType ?? 'application/octet-stream',
       size: file.buffer.length,
+      kind: isVoice ? 'voice' : 'file',
+      durationMs,
     };
     content.attachmentData = file.buffer;
   }

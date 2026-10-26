@@ -129,10 +129,21 @@ async function updatePrivacy(req, res, next) {
     user.privacy = { ...(user.privacy ?? {}), showOnlineStatus: value };
     await user.save();
     await presence.privacyChanged(user._id);
+    if (value === false) require('../services/typing').stopUser(user._id);
     res.json({ user: user.toPublic() });
   } catch (err) {
     next(err);
   }
 }
 
-module.exports = { updateMe, uploadMyAvatar, removeMyAvatar, getAvatar, searchUsers, getProfile, updatePrivacy };
+async function pinGeneral(req, res, next) {
+  try {
+    if (typeof req.body?.pinned !== 'boolean') return sendError(res, 400, 'invalid_data');
+    await User.updateOne({ _id: req.user._id }, { generalPinnedAt: req.body.pinned ? new Date() : null });
+    const user = await User.findById(req.user._id);
+    require('../services/realtime').toUsers([user._id], 'preferences:changed', { generalPinnedAt: user.generalPinnedAt ? new Date(user.generalPinnedAt).toISOString() : null });
+    res.json({ user: user.toPublic() });
+  } catch (err) { next(err); }
+}
+
+module.exports = { updateMe, uploadMyAvatar, removeMyAvatar, getAvatar, searchUsers, getProfile, updatePrivacy, pinGeneral };

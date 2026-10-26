@@ -4,6 +4,7 @@ const conversations = require('../services/conversationService');
 const { toMessageDto, presentMessage } = require('../modules/messages/message.presenter');
 const { apiError } = require('../utils/apiError');
 const realtime = require('../services/realtime');
+const groups = require('../services/groupService');
 
 function fail(res, err, next) {
   if (err instanceof actions.ActionError) {
@@ -99,6 +100,7 @@ async function deleteInConversation(req, res, next) {
       messageId: req.params.messageId,
       userId: req.user._id,
       mode,
+      canDeleteOthers: conversation.kind !== 'group' || groups.isAdmin(conversation, req.user._id),
     });
     if (result.deletedIds.length) {
       realtime.toUsers(audience(conversation, req.user._id, mode === 'everyone'), 'message:deleted', {
@@ -123,6 +125,7 @@ async function bulkDeleteInConversation(req, res, next) {
       ids: req.body?.ids,
       userId: req.user._id,
       mode,
+      canDeleteOthers: conversation.kind !== 'group' || groups.isAdmin(conversation, req.user._id),
     });
     if (result.deletedIds.length) {
       realtime.toUsers(audience(conversation, req.user._id, mode === 'everyone'), 'message:deleted', {
@@ -142,6 +145,9 @@ async function clearInConversation(req, res, next) {
     const conversation = await withConversation(req, res);
     if (!conversation) return;
     const mode = req.body?.mode ?? 'me';
+    if (conversation.kind === 'group' && mode === 'both' && !groups.isAdmin(conversation, req.user._id)) {
+      return res.status(403).json(apiError('group_admin_required', 'Нужны права администратора'));
+    }
     await actions.clearHistory({ conversationId: conversation._id, userId: req.user._id, mode });
     realtime.toUsers(audience(conversation, req.user._id, mode === 'both'), 'chat:changed', {
       conversationId: String(conversation._id),
@@ -158,6 +164,7 @@ async function deleteConversation(req, res, next) {
     const conversation = await withConversation(req, res);
     if (!conversation) return;
     const mode = req.body?.mode ?? req.query.mode ?? 'me';
+    if (conversation.kind === 'group') return res.status(400).json(apiError('group_use_leave', 'Для группы используйте выход или управление группой'));
     await actions.deleteChat({ conversationId: conversation._id, userId: req.user._id, mode });
     realtime.toUsers(audience(conversation, req.user._id, mode === 'both'), 'chat:changed', {
       conversationId: String(conversation._id),

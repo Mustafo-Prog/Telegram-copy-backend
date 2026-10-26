@@ -76,7 +76,7 @@ async function editMessage({ conversationId, messageId, userId, text }) {
   return Message.findOne({ _id: message._id }).populate('sender', PEER_FIELDS);
 }
 
-async function deleteMessage({ conversationId, messageId, userId, mode = 'me' }) {
+async function deleteMessage({ conversationId, messageId, userId, mode = 'me', canDeleteOthers = true }) {
   const message = await findMessage(conversationId, messageId);
 
   if (conversationId === null) {
@@ -94,12 +94,13 @@ async function deleteMessage({ conversationId, messageId, userId, mode = 'me' })
       { upsert: true }
     );
   } else {
+    if (!canDeleteOthers && String(message.sender) !== String(userId)) throw new ActionError(403, 'forbidden', 'Удалять у всех можно только свои сообщения');
     await hardDelete([message._id], conversationId);
   }
   return { deleted: 1, skipped: 0, deletedIds: [String(message._id)] };
 }
 
-async function bulkDelete({ conversationId, ids, userId, mode = 'everyone' }) {
+async function bulkDelete({ conversationId, ids, userId, mode = 'everyone', canDeleteOthers = true }) {
   const list = assertIds(ids);
 
   if (conversationId === null) {
@@ -111,7 +112,9 @@ async function bulkDelete({ conversationId, ids, userId, mode = 'everyone' }) {
     return { deleted: ownIds.length, skipped: list.length - ownIds.length, deletedIds: ownIds.map(String) };
   }
 
-  const found = (await Message.find({ _id: { $in: list }, conversation: conversationId })).map((m) => m._id);
+  const filter = { _id: { $in: list }, conversation: conversationId };
+  if (mode === 'everyone' && !canDeleteOthers) filter.sender = userId;
+  const found = (await Message.find(filter)).map((m) => m._id);
   if (assertMode(mode, ['me', 'everyone']) === 'me') {
     for (const id of found) {
       await MessageHide.findOneAndUpdate({ message: id, user: userId }, { conversation: conversationId }, { upsert: true });

@@ -1,0 +1,18 @@
+const { Router } = require('express');
+const { requireAuth } = require('../middlewares/auth');
+const controller = require('../controllers/groupController');
+const router = Router();
+router.use(requireAuth);
+router.post('/', controller.create);
+router.get('/invites/:token', controller.previewInvite);
+router.post('/invites/:token/join', controller.join);
+router.get('/:id', controller.get);
+router.patch('/:id', controller.rename);
+router.post('/:id/members', controller.addMembers);
+router.delete('/:id/members/:userId', controller.removeMember);
+router.patch('/:id/admins/:userId', controller.setAdmin);
+router.patch('/:id/owner', controller.transferOwner);
+router.post('/:id/invite', controller.invite);
+router.post('/:id/leave', controller.leave);
+router.delete('/:id', controller.remove);
+module.exports = router;

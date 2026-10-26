@@ -11,7 +11,8 @@ mongoose.connect = async () => {};
 
 const memdb = require('./memdb');
 const models = ['../../models/User', '../../models/Conversation', '../../modules/messages/message.model',
-  '../../models/ConversationState', '../../models/MessageHide', '../../models/Avatar', '../../models/LoginCode'];
+  '../../models/ConversationState', '../../models/MessageHide', '../../models/Avatar', '../../models/LoginCode',
+  '../../models/GeneralReadState'];
 for (const m of models) memdb.install(require(path.join(__dirname, m)).__model ?? Object.values(require(path.join(__dirname, m)))[0]);
 
 module.exports = { memdb };

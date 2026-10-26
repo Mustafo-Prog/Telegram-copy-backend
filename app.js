@@ -28,6 +28,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/conversations', conversationRoutes);
+app.use('/api/groups', require('./routes/groupRoutes'));
 
 app.use(notFound);
 app.use(errorHandler);

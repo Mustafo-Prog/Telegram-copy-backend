@@ -3,6 +3,9 @@ const realtime = require('../../services/realtime');
 const messageService = require('./message.service');
 const { toMessageDto, presentMessages, presentMessage } = require('./message.presenter');
 const { prepareContent } = require('../../services/messageContent');
+const generalReads = require('../../services/generalReadService');
+const { Message } = require('./message.model');
+const { apiError } = require('../../utils/apiError');
 
 async function list(req, res, next) {
   try {
@@ -33,4 +36,20 @@ async function create(req, res, next) {
   }
 }
 
-module.exports = { list, create };
+async function markRead(req, res, next) {
+  try {
+    const messageId = req.body?.messageId;
+    if (!mongoose.isValidObjectId(messageId)) {
+      return res.status(400).json(apiError('ids_invalid', 'Некорректное сообщение'));
+    }
+    if (!(await Message.exists({ _id: messageId, conversation: null }))) {
+      return res.status(404).json(apiError('message_not_found', 'Сообщение недоступно'));
+    }
+    const state = await generalReads.markRead(req.user._id, messageId);
+    const payload = { userId: String(req.user._id), messageId: String(state.lastReadMessageId) };
+    realtime.toGeneral('general:read', payload);
+    res.json(payload);
+  } catch (err) { next(err); }
+}
+
+module.exports = { list, create, markRead };

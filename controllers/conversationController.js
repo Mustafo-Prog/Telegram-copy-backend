@@ -45,10 +45,8 @@ async function listMessages(req, res, next) {
 
     const before = mongoose.isValidObjectId(req.query.before) ? req.query.before : undefined;
     const docs = await conversations.listMessages(conversation._id, req.user._id, { before });
-    const peer = conversation.participants.find((p) => String(p._id) !== String(req.user._id));
-    const peerState = peer && await ConversationState.findOne({ conversation: conversation._id, user: peer._id });
     res.json({ messages: await presentMessages(docs, req.user._id), hasMore: docs.length === conversations.PAGE_SIZE,
-      peerLastReadMessageId: peerState?.lastReadMessageId ? String(peerState.lastReadMessageId) : null });
+      peerLastReadMessageId: await conversations.peerReadCursor(conversation, req.user._id) });
   } catch (err) {
     next(err);
   }
@@ -63,9 +61,11 @@ async function sendMessage(req, res, next) {
 
     const message = await conversations.createMessage(conversation, req.user._id, content.text, content);
     const dto = toMessageDto(message);
-    realtime.toUsers(conversation.participants, 'message:new', {
+    const current = await conversations.getForUser(conversation._id, req.user._id);
+    realtime.toUsers(current?.participants ?? [], 'message:new', {
       scope: 'conversation',
       conversationId: String(conversation._id),
+      conversationTitle: current?.kind === 'group' ? current.title : null,
       message: dto,
     });
     res.status(201).json({ message: await presentMessage(message, req.user._id) });
@@ -98,4 +98,24 @@ async function markRead(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { listConversations, openConversation, listMessages, sendMessage, markRead };
+async function getConversation(req, res, next) {
+  try {
+    const conversation = await conversations.getDtoForUser(req.params.id, req.user._id);
+    if (!conversation) return fail(res, 404, 'conversation_not_found', 'Диалог не найден');
+    res.json({ conversation });
+  } catch (err) { next(err); }
+}
+
+async function pin(req, res, next) {
+  try {
+    if (typeof req.body?.pinned !== 'boolean') return fail(res, 400, 'invalid_data', 'Некорректное значение');
+    const conversation = await conversations.getForUser(req.params.id, req.user._id);
+    if (!conversation) return fail(res, 404, 'conversation_not_found', 'Диалог не найден');
+    await ConversationState.findOneAndUpdate({ conversation: conversation._id, user: req.user._id },
+      { pinnedAt: req.body.pinned ? new Date() : null }, { upsert: true, new: true });
+    realtime.toUsers([req.user._id], 'chat:changed', { conversationId: String(conversation._id), reason: 'pin' });
+    res.json({ conversation: await conversations.getDtoForUser(conversation._id, req.user._id) });
+  } catch (err) { next(err); }
+}
+
+module.exports = { listConversations, openConversation, listMessages, sendMessage, markRead, getConversation, pin };

@@ -6,6 +6,8 @@ const { User } = require('../models/User');
 const { verifyToken } = require('../utils/token');
 const { isAllowedOrigin } = require('../config/origins');
 const presence = require('./presence');
+const typing = require('./typing');
+const { Conversation } = require('../models/Conversation');
 
 const GENERAL_ROOM = 'general';
 const WATCH_LIMIT = 50;
@@ -21,6 +23,10 @@ function init(httpServer) {
     maxHttpBufferSize: 100 * 1024,
   });
   presence.attach(io);
+  typing.attach((audience, payload) => {
+    if (payload.scope === 'general') toGeneral('typing:update', payload);
+    else toUsers(audience ?? [], 'typing:update', payload);
+  });
 
   io.use(async (socket, next) => {
     try {
@@ -43,6 +49,34 @@ function init(httpServer) {
     presence.connected(userId, socket.id).catch((err) => console.error('Presence:', err.message));
 
     socket.on('presence:activity', () => presence.activity(userId, socket.id).catch((err) => console.error('Presence:', err.message)));
+
+    let lastTypingAt = 0;
+    socket.on('typing:set', async (payload, ack) => {
+      const respond = (ok) => { if (typeof ack === 'function') ack({ ok }); };
+      try {
+        if (typeof payload?.active !== 'boolean' || !['general', 'conversation'].includes(payload.scope)) return respond(false);
+        const now = Date.now();
+        if (payload.active && now - lastTypingAt < 1000) return respond(false);
+        lastTypingAt = payload.active ? now : 0;
+        let conversationId = null;
+        let audience = null;
+        if (payload.scope === 'conversation') {
+          if (!mongoose.isValidObjectId(payload.conversationId)) return respond(false);
+          const conversation = await Conversation.findOne({ _id: payload.conversationId, participants: userId });
+          if (!conversation) return respond(false);
+          conversationId = String(conversation._id);
+          audience = conversation.participants;
+        }
+        const user = await User.findById(userId);
+        if (!user) return respond(false);
+        if (user.privacy?.showOnlineStatus === false) { typing.stopUser(userId); return respond(true); }
+        typing.set({ socketId: socket.id, userId, displayName: user.displayName, conversationId, audience, active: payload.active });
+        if (typeof ack === 'function') ack({ ok: true });
+      } catch (err) {
+        console.error('Typing:', err.message);
+        if (typeof ack === 'function') ack({ ok: false });
+      }
+    });
 
     // Подписка на статусы: только видимые статусы (скрытые приходят как «hidden»)
     socket.on('presence:watch', async (payload, ack) => {
@@ -74,7 +108,7 @@ function init(httpServer) {
       }
     });
 
-    socket.on('disconnect', () => presence.disconnected(userId, socket.id));
+    socket.on('disconnect', () => { presence.disconnected(userId, socket.id); typing.stopSocket(socket.id); });
   });
 
   return io;

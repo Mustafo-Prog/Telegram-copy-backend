@@ -10,6 +10,7 @@ const userSchema = new mongoose.Schema(
     bio: { type: String, default: '', trim: true, maxlength: 150 },
     avatarUrl: { type: String, default: null },
     lastSeenAt: { type: Date, default: null },
+    generalPinnedAt: { type: Date, default: null },
     privacy: {
       showOnlineStatus: { type: Boolean, default: true },
     },
@@ -22,6 +23,7 @@ userSchema.methods.toPublic = function toPublic() {
   return {
     id: this._id.toString(),
     email: this.email,
+    generalPinnedAt: this.generalPinnedAt ? new Date(this.generalPinnedAt).toISOString() : null,
     displayName: this.displayName,
     username: this.username ?? null,
     bio: this.bio ?? '',
