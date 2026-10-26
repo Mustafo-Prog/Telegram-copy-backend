@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const actions = require('../services/messageActions');
 const conversations = require('../services/conversationService');
-const { toMessageDto } = require('../modules/messages/message.presenter');
+const { toMessageDto, presentMessage } = require('../modules/messages/message.presenter');
 const { apiError } = require('../utils/apiError');
 const realtime = require('../services/realtime');
 
@@ -40,7 +40,7 @@ async function editGeneral(req, res, next) {
     });
     const dto = toMessageDto(message);
     realtime.toGeneral('message:updated', { scope: 'general', message: dto });
-    res.json({ message: dto });
+    res.json({ message: await presentMessage(message, req.user._id) });
   } catch (err) {
     fail(res, err, next);
   }
@@ -83,7 +83,7 @@ async function editInConversation(req, res, next) {
       conversationId: String(conversation._id),
       message: dto,
     });
-    res.json({ message: dto });
+    res.json({ message: await presentMessage(message, req.user._id) });
   } catch (err) {
     fail(res, err, next);
   }

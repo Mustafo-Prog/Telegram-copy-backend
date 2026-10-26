@@ -40,9 +40,9 @@ function init(httpServer) {
     const userId = socket.data.userId;
     socket.join(userRoom(userId));
     socket.join(GENERAL_ROOM);
-    presence.connected(userId, socket.id);
+    presence.connected(userId, socket.id).catch((err) => console.error('Presence:', err.message));
 
-    socket.on('presence:activity', () => presence.activity(userId, socket.id));
+    socket.on('presence:activity', () => presence.activity(userId, socket.id).catch((err) => console.error('Presence:', err.message)));
 
     // Подписка на статусы: только видимые статусы (скрытые приходят как «hidden»)
     socket.on('presence:watch', async (payload, ack) => {
@@ -50,13 +50,21 @@ function init(httpServer) {
         ? payload.userIds.filter((id) => mongoose.isValidObjectId(id)).slice(0, WATCH_LIMIT)
         : [];
       const statuses = {};
+      const lastSeen = {};
+      try {
       for (const id of ids) {
         const user = await User.findById(id);
         if (!user) continue;
         socket.join(presence.presenceRoom(id));
-        statuses[String(id)] = presence.visibleStatus(user);
+        const visible = presence.visiblePresence(user);
+        statuses[String(id)] = visible.status;
+        lastSeen[String(id)] = visible.lastSeenAt;
       }
-      if (typeof ack === 'function') ack({ statuses });
+      if (typeof ack === 'function') ack({ statuses, lastSeen });
+      } catch (err) {
+        console.error('Presence subscription:', err.message);
+        if (typeof ack === 'function') ack({ statuses: {}, lastSeen: {} });
+      }
     });
 
     socket.on('presence:unwatch', (payload) => {

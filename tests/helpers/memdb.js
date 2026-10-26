@@ -36,6 +36,8 @@ function matchCond(value, cond) {
       case '$ne': if (eq(value, arg)) return false; break;
       case '$gt': if (!(norm(value) > norm(arg))) return false; break;
       case '$lt': if (!(norm(value) < norm(arg))) return false; break;
+      case '$gte': if (!(norm(value) >= norm(arg))) return false; break;
+      case '$lte': if (!(norm(value) <= norm(arg))) return false; break;
       case '$regex': if (!new RegExp(arg).test(String(norm(value) ?? ''))) return false; break;
       default: throw new Error(`memdb: неподдерживаемый оператор ${op}`);
     }
@@ -88,6 +90,9 @@ function applyUpdate(model, d, update, isInsert) {
     if (update.$set) Object.assign(d, update.$set);
     if (isInsert && update.$setOnInsert) Object.assign(d, update.$setOnInsert);
     if (update.$unset) for (const k of Object.keys(update.$unset)) delete d[k];
+    if (update.$max) for (const [k, v] of Object.entries(update.$max)) {
+      if (d[k] == null || cmp(norm(d[k]), norm(v)) < 0) d[k] = v;
+    }
   } else if (update) {
     Object.assign(d, update);
   }

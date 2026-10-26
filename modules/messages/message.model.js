@@ -10,7 +10,14 @@ const messageSchema = new mongoose.Schema(
       immutable: true,
       index: true,
     },
-    text: { type: String, required: true, trim: true, maxlength: MESSAGE_MAX_LENGTH },
+    text: { type: String, default: '', required() { return !this.attachment; }, trim: true, maxlength: MESSAGE_MAX_LENGTH },
+    replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
+    attachment: {
+      type: new mongoose.Schema({ name: String, contentType: String, size: Number }, { _id: false }),
+      default: null,
+    },
+    // Binary content is excluded from ordinary queries, DTOs and socket events.
+    attachmentData: { type: Buffer, select: false },
     sentAt: { type: Date, required: true, default: () => new Date(), immutable: true },
     // null — сообщение общего чата; иначе — личный диалог
     conversation: { type: mongoose.Schema.Types.ObjectId, ref: 'Conversation', default: null },

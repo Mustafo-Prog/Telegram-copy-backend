@@ -48,7 +48,7 @@ async function refreshLastMessage(conversationId) {
   const last = await Message.findOne({ conversation: conversationId }).sort({ _id: -1 });
   await Conversation.updateOne(
     { _id: conversationId },
-    { lastMessageText: last?.text ?? '', lastMessageAt: last?.sentAt ?? new Date() }
+    { lastMessageText: last?.text || last?.attachment?.name || '', lastMessageAt: last?.sentAt ?? new Date() }
   );
 }
 
@@ -61,13 +61,13 @@ async function hardDelete(ids, conversationId) {
 }
 
 async function editMessage({ conversationId, messageId, userId, text }) {
-  const error = validateMessageInput({ text });
-  if (error) throw new ActionError(400, error.code, error.message);
-
   const message = await findMessage(conversationId, messageId);
   if (String(message.sender) !== String(userId)) {
     throw new ActionError(403, 'forbidden', 'Редактировать можно только свои сообщения');
   }
+
+  const error = validateMessageInput({ text: text === undefined ? null : text }, { hasAttachment: Boolean(message.attachment) });
+  if (error) throw new ActionError(400, error.code, error.message);
 
   message.text = text.trim();
   message.editedAt = new Date();

@@ -9,6 +9,7 @@ const userSchema = new mongoose.Schema(
     username: { type: String, trim: true, lowercase: true, maxlength: 32, index: { unique: true, sparse: true } },
     bio: { type: String, default: '', trim: true, maxlength: 150 },
     avatarUrl: { type: String, default: null },
+    lastSeenAt: { type: Date, default: null },
     privacy: {
       showOnlineStatus: { type: Boolean, default: true },
     },

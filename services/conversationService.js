@@ -2,6 +2,7 @@ const { Conversation } = require('../models/Conversation');
 const { Message } = require('../modules/messages/message.model');
 const { ConversationState } = require('../models/ConversationState');
 const { MessageHide } = require('../models/MessageHide');
+const mongoose = require('mongoose');
 
 const EPOCH = new Date(0);
 
@@ -20,7 +21,7 @@ async function unhideFor(conversationId, userId) {
 }
 
 const PAGE_SIZE = 50;
-const PEER_FIELDS = 'displayName username avatarUrl privacy';
+const PEER_FIELDS = 'displayName username avatarUrl privacy lastSeenAt';
 const presence = require('./presence');
 
 function directKeyFor(a, b) {
@@ -56,7 +57,7 @@ async function findOrCreateDirect(userId, peerId) {
 async function previewFor(conversationId, userId) {
   const filter = await visibilityFilter(conversationId, userId);
   const last = await Message.findOne(filter).sort({ _id: -1 });
-  return last ? { text: last.text, at: last.sentAt } : { text: '', at: null };
+  return last ? { text: last.text || last.attachment?.name || '', at: last.sentAt } : { text: '', at: null };
 }
 
 // Ошибка для контроллера: статус и код API
@@ -78,6 +79,7 @@ async function listForUser(userId) {
 
 // Диалог только для его участников; чужой или несуществующий — null
 async function getForUser(conversationId, userId) {
+  if (!mongoose.isValidObjectId(conversationId)) return null;
   return Conversation.findOne({ _id: conversationId, participants: userId }).populate('participants', PEER_FIELDS);
 }
 
@@ -90,8 +92,8 @@ async function listMessages(conversationId, userId, { before } = {}) {
   return docs.reverse();
 }
 
-async function createMessage(conversation, senderId, text) {
-  const message = await Message.create({ sender: senderId, text, conversation: conversation._id });
+async function createMessage(conversation, senderId, text, content = {}) {
+  const message = await Message.create({ ...content, sender: senderId, text, conversation: conversation._id });
   // Диалог могли удалить «у обоих» между проверкой доступа и записью: не оставляем сиротское сообщение
   if (!(await Conversation.exists({ _id: conversation._id }))) {
     await Message.deleteOne({ _id: message._id });
@@ -101,13 +103,13 @@ async function createMessage(conversation, senderId, text) {
   await ConversationState.updateMany({ conversation: conversation._id }, { hidden: false });
   await Conversation.updateOne(
     { _id: conversation._id },
-    { lastMessageAt: message.sentAt, lastMessageText: text }
+    { lastMessageAt: message.sentAt, lastMessageText: text || message.attachment?.name || '' }
   );
   return message.populate('sender', PEER_FIELDS);
 }
 
 // Собеседник и превью — свои для каждого участника. Статус собеседника — с учетом его настройки
-function buildConversationDto(conversation, userId, preview) {
+function buildConversationDto(conversation, userId, preview, unreadCount = 0, peerLastReadMessageId = null) {
   const peer = conversation.participants.find((p) => String(p._id) !== String(userId));
   return {
     id: conversation._id.toString(),
@@ -118,16 +120,25 @@ function buildConversationDto(conversation, userId, preview) {
           username: peer.username ?? null,
           avatarUrl: peer.avatarUrl ?? null,
           presence: presence.visibleStatus(peer),
+          lastSeenAt: presence.visiblePresence(peer).lastSeenAt,
         }
       : null,
     lastMessageText: preview.text,
     lastMessageAt: (preview.at ?? conversation.createdAt ?? new Date()).toISOString(),
+    unreadCount,
+    peerLastReadMessageId: peerLastReadMessageId ? String(peerLastReadMessageId) : null,
   };
 }
 
 async function toConversationDto(conversation, userId) {
   const preview = await previewFor(conversation._id, userId);
-  return buildConversationDto(conversation, userId, preview);
+  const ownState = await ConversationState.findOne({ conversation: conversation._id, user: userId });
+  const peer = conversation.participants.find((p) => String(p._id) !== String(userId));
+  const peerState = peer && await ConversationState.findOne({ conversation: conversation._id, user: peer._id });
+  const filter = await visibilityFilter(conversation._id, userId);
+  if (ownState?.lastReadMessageId) filter._id.$gt = ownState.lastReadMessageId;
+  const unreadCount = await Message.countDocuments({ ...filter, sender: { $ne: userId } });
+  return buildConversationDto(conversation, userId, preview, unreadCount, peerState?.lastReadMessageId);
 }
 
 // Список диалогов: состояния и скрытия загружаем одним запросом на всех, а не по диалогу
@@ -135,10 +146,10 @@ async function listDtosForUser(userId) {
   const docs = await listForUser(userId);
   if (docs.length === 0) return [];
   const ids = docs.map((c) => c._id);
-  const states = await ConversationState.find({ conversation: { $in: ids }, user: userId });
+  const states = await ConversationState.find({ conversation: { $in: ids } });
   const hides = await MessageHide.find({ conversation: { $in: ids }, user: userId });
 
-  const stateByConversation = new Map(states.map((st) => [String(st.conversation), st]));
+  const stateByConversation = new Map(states.filter((st) => String(st.user) === String(userId)).map((st) => [String(st.conversation), st]));
   const hiddenByConversation = new Map();
   for (const h of hides) {
     const key = String(h.conversation);
@@ -150,13 +161,18 @@ async function listDtosForUser(userId) {
     docs.map(async (c) => {
       const key = String(c._id);
       const state = stateByConversation.get(key);
-      const last = await Message.findOne({
+      const filter = {
         conversation: c._id,
         sentAt: { $gt: state?.clearedBefore ?? EPOCH },
         _id: { $nin: hiddenByConversation.get(key) ?? [] },
-      }).sort({ _id: -1 });
-      const preview = last ? { text: last.text, at: last.sentAt } : { text: '', at: null };
-      return buildConversationDto(c, userId, preview);
+      };
+      const last = await Message.findOne(filter).sort({ _id: -1 });
+      const preview = last ? { text: last.text || last.attachment?.name || '', at: last.sentAt } : { text: '', at: null };
+      const unreadFilter = { ...filter, sender: { $ne: userId }, _id: { ...filter._id } };
+      if (state?.lastReadMessageId) unreadFilter._id.$gt = state.lastReadMessageId;
+      const unreadCount = await Message.countDocuments(unreadFilter);
+      const peerState = states.find((st) => String(st.conversation) === key && String(st.user) !== String(userId));
+      return buildConversationDto(c, userId, preview, unreadCount, peerState?.lastReadMessageId);
     })
   );
 }

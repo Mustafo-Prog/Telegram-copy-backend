@@ -98,10 +98,10 @@ async function searchUsers(req, res, next) {
       username: { $regex: `^${escapeRegex(query)}` },
       _id: { $ne: req.user._id },
     })
-      .select('displayName username bio avatarUrl privacy')
+      .select('displayName username bio avatarUrl privacy lastSeenAt')
       .limit(SEARCH_LIMIT);
 
-    res.json({ users: users.map((u) => ({ ...u.toPublicProfile(), presence: presence.visibleStatus(u) })) });
+    res.json({ users: users.map((u) => ({ ...u.toPublicProfile(), presence: presence.visibleStatus(u), lastSeenAt: presence.visiblePresence(u).lastSeenAt })) });
   } catch (err) {
     next(err);
   }
@@ -114,7 +114,7 @@ async function getProfile(req, res, next) {
 
     const user = await User.findOne({ username });
     if (!user) return sendError(res, 404, 'user_not_found');
-    res.json({ user: { ...user.toPublicProfile(), presence: presence.visibleStatus(user) } });
+    res.json({ user: { ...user.toPublicProfile(), presence: presence.visibleStatus(user), lastSeenAt: presence.visiblePresence(user).lastSeenAt } });
   } catch (err) {
     next(err);
   }

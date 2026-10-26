@@ -1,15 +1,15 @@
 const mongoose = require('mongoose');
 const realtime = require('../../services/realtime');
-const { validateMessageInput } = require('./message.schema');
 const messageService = require('./message.service');
-const { toMessageDto } = require('./message.presenter');
+const { toMessageDto, presentMessages, presentMessage } = require('./message.presenter');
+const { prepareContent } = require('../../services/messageContent');
 
 async function list(req, res, next) {
   try {
     const before = mongoose.isValidObjectId(req.query.before) ? String(req.query.before) : undefined;
     const docs = await messageService.listRecentMessages({ before });
     res.json({
-      messages: docs.map(toMessageDto),
+      messages: await presentMessages(docs, req.user._id),
       hasMore: docs.length === messageService.PAGE_SIZE,
     });
   } catch (err) {
@@ -19,18 +19,15 @@ async function list(req, res, next) {
 
 async function create(req, res, next) {
   try {
-    const error = validateMessageInput(req.body);
-    if (error) {
-      return res.status(400).json(error);
-    }
+    const content = await prepareContent({ userId: req.user._id, body: req.body, file: req.file });
 
     const message = await messageService.createMessage({
       senderId: req.user._id,
-      text: req.body.text.trim(),
+      ...content,
     });
     const dto = toMessageDto(message);
     realtime.toGeneral('message:new', { scope: 'general', message: dto });
-    res.status(201).json({ message: dto });
+    res.status(201).json({ message: await presentMessage(message, req.user._id) });
   } catch (err) {
     next(err);
   }

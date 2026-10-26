@@ -12,6 +12,7 @@ let io = null;
 const sockets = new Map(); // userId -> Map(socketId -> lastActivityMs)
 const lastRaw = new Map(); // userId -> 'online' | 'offline' (что уже разослано)
 const graceTimers = new Map();
+const lastActivity = new Map();
 
 const presenceRoom = (userId) => `presence:${String(userId)}`;
 
@@ -38,42 +39,62 @@ function visibleStatus(user) {
   return rawOnline(user._id) ? 'online' : 'offline';
 }
 
+function visiblePresence(user) {
+  const status = visibleStatus(user);
+  return {
+    status,
+    lastSeenAt: status === 'offline' && user.lastSeenAt ? new Date(user.lastSeenAt).toISOString() : null,
+  };
+}
+
+async function rememberActivity(userId, timestamp) {
+  // Atomic maximum keeps delayed writes from moving the timestamp backwards.
+  await User.updateOne({ _id: userId }, { $max: { lastSeenAt: new Date(timestamp) } });
+}
+
 async function emitStatus(userId) {
   if (!io) return;
   const user = await User.findById(userId);
   if (!user) return;
-  io.to(presenceRoom(userId)).emit('presence:update', { userId: String(userId), status: visibleStatus(user) });
+  io.to(presenceRoom(userId)).emit('presence:update', { userId: String(userId), ...visiblePresence(user) });
 }
 
 async function publishIfChanged(userId) {
   const now = rawOnline(userId) ? 'online' : 'offline';
   if (lastRaw.get(userId) === now) return;
   lastRaw.set(userId, now);
+  if (now === 'offline' && lastActivity.has(userId)) await rememberActivity(userId, lastActivity.get(userId));
   await emitStatus(userId);
 }
 
 function connected(userId, socketId) {
   const id = String(userId);
   if (!sockets.has(id)) sockets.set(id, new Map());
-  sockets.get(id).set(socketId, Date.now());
+  const now = Date.now();
+  sockets.get(id).set(socketId, now);
+  lastActivity.set(id, now);
   if (graceTimers.has(id)) {
     clearTimeout(graceTimers.get(id));
     graceTimers.delete(id);
   }
-  return publishIfChanged(id);
+  return rememberActivity(id, now).then(() => publishIfChanged(id));
 }
 
 function activity(userId, socketId) {
   const map = sockets.get(String(userId));
   if (!map || !map.has(socketId)) return Promise.resolve();
-  map.set(socketId, Date.now());
-  return publishIfChanged(userId);
+  const id = String(userId);
+  const now = Date.now();
+  map.set(socketId, now);
+  lastActivity.set(id, now);
+  return rememberActivity(id, now).then(() => publishIfChanged(id));
 }
 
 function disconnected(userId, socketId) {
   const id = String(userId);
   const map = sockets.get(id);
   if (!map) return Promise.resolve();
+  if (rawOnline(id)) lastActivity.set(id, Date.now());
   map.delete(socketId);
   if (map.size > 0) return Promise.resolve();
 
@@ -81,7 +102,7 @@ function disconnected(userId, socketId) {
   // Короткая задержка: перезагрузка страницы не должна мигать «offline»
   const timer = setTimeout(() => {
     graceTimers.delete(id);
-    publishIfChanged(id);
+    publishIfChanged(id).catch((err) => console.error('Presence:', err.message));
   }, GRACE_MS);
   graceTimers.set(id, timer);
   return Promise.resolve();
@@ -93,7 +114,7 @@ function privacyChanged(userId) {
 }
 
 function sweep() {
-  for (const userId of [...sockets.keys()]) publishIfChanged(userId);
+  for (const userId of [...sockets.keys()]) publishIfChanged(userId).catch((err) => console.error('Presence:', err.message));
 }
 
 module.exports = {
@@ -102,6 +123,7 @@ module.exports = {
   activity,
   disconnected,
   visibleStatus,
+  visiblePresence,
   privacyChanged,
   presenceRoom,
   rawOnline,

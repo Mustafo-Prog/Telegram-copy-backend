@@ -7,6 +7,7 @@ const conversationStateSchema = new mongoose.Schema(
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     clearedBefore: { type: Date, default: () => new Date(0) },
     hidden: { type: Boolean, default: false },
+    lastReadMessageId: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
   },
   { timestamps: true }
 );
