@@ -78,17 +78,27 @@ class ChatGoneError extends Error {
 }
 
 async function listForUser(userId) {
-  const [hiddenIds, pinnedIds] = await Promise.all([
+  const [hiddenValues, pinnedValues] = await Promise.all([
     ConversationState.distinct('conversation', { user: userId, hidden: true }),
     ConversationState.distinct('conversation', { user: userId, pinnedAt: { $ne: null } }),
   ]);
+  // MongoDB returns ObjectIds from distinct; compare their values, not object identity.
+  const hiddenIds = hiddenValues.map(String);
+  const hidden = new Set(hiddenIds);
   const recent = await Conversation.find({ participants: userId, _id: { $nin: hiddenIds } })
     .sort({ lastMessageAt: -1 })
     .limit(100)
     .populate('participants', PEER_FIELDS);
-  const missing = pinnedIds.filter((id) => !hiddenIds.includes(id) && !recent.some((c) => String(c._id) === id));
+  const recentIds = new Set(recent.map((conversation) => String(conversation._id)));
+  const missing = [...new Set(pinnedValues.map(String))].filter((id) => !hidden.has(id) && !recentIds.has(id));
   const pinned = missing.length ? await Conversation.find({ participants: userId, _id: { $in: missing } }).populate('participants', PEER_FIELDS) : [];
-  return [...pinned, ...recent];
+  const included = new Set();
+  return [...pinned, ...recent].filter((conversation) => {
+    const id = String(conversation._id);
+    if (hidden.has(id) || included.has(id)) return false;
+    included.add(id);
+    return true;
+  });
 }
 
 // Диалог только для его участников; чужой или несуществующий — null

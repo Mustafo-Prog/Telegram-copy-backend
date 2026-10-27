@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 
-// Аватар хранится в MongoDB: сжатая картинка 256×256 (около 10–30 КБ), одна запись на пользователя
+// Аватар хранится в MongoDB: сжатая картинка до 1024×1024 и 300 КиБ, одна запись на пользователя.
 const avatarSchema = new mongoose.Schema(
   {
     owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
