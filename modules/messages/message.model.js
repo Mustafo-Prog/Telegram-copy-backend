@@ -12,6 +12,11 @@ const messageSchema = new mongoose.Schema(
     },
     text: { type: String, default: '', required() { return !this.attachment; }, trim: true, maxlength: MESSAGE_MAX_LENGTH },
     replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
+    clientMessageId: { type: String, minlength: 1, maxlength: 80, default: null },
+    savedFrom: {
+      type: new mongoose.Schema({ senderName: String, createdAt: Date }, { _id: false }),
+      default: null,
+    },
     attachment: {
       type: new mongoose.Schema({ name: String, contentType: String, size: Number,
         kind: { type: String, enum: ['file', 'voice'], default: 'file' }, durationMs: { type: Number, default: null } }, { _id: false }),

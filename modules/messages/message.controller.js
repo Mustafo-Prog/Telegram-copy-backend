@@ -26,6 +26,7 @@ async function create(req, res, next) {
 
     const message = await messageService.createMessage({
       senderId: req.user._id,
+      sender: req.user,
       ...content,
     });
     const dto = toMessageDto(message);

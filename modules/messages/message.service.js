@@ -2,8 +2,9 @@ const { Message } = require('./message.model');
 
 const PAGE_SIZE = 50;
 
-async function createMessage({ senderId, text, ...content }) {
+async function createMessage({ senderId, sender, text, ...content }) {
   const message = await Message.create({ sender: senderId, text, ...content });
+  if (sender) { message.sender = sender; return message; }
   return message.populate('sender', 'displayName username avatarUrl');
 }
 

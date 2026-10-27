@@ -9,6 +9,8 @@ const router = Router();
 router.use(requireAuth);
 router.get('/', controller.listConversations);
 router.post('/', controller.openConversation);
+router.post('/saved', require('../controllers/savedController').open);
+router.post('/saved/messages/:messageId', require('../controllers/savedController').save);
 router.get('/:id', controller.getConversation);
 router.patch('/:id/pin', controller.pin);
 router.get('/:id/search', require('../controllers/searchController').search);

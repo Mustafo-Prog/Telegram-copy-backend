@@ -13,7 +13,7 @@ function contentError(status, code, message) {
 
 const receive = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_ATTACHMENT_BYTES, files: 1, fields: 3, fieldSize: 16 * 1024 },
+  limits: { fileSize: MAX_ATTACHMENT_BYTES, files: 1, fields: 4, fieldSize: 16 * 1024 },
 }).single('attachment');
 
 function uploadAttachment(req, res, next) {
@@ -34,6 +34,12 @@ async function prepareContent({ conversationId = null, userId, body, file }) {
   const error = validateMessageInput(body, { hasAttachment: Boolean(file) });
   if (error) throw contentError(400, error.code, error.message);
   const content = { text: (body?.text ?? '').trim(), replyTo: null };
+  if (body?.clientMessageId !== undefined) {
+    if (typeof body.clientMessageId !== 'string' || !body.clientMessageId.length || body.clientMessageId.length > 80) {
+      throw contentError(400, 'invalid_data', 'Некорректный идентификатор отправки');
+    }
+    content.clientMessageId = body.clientMessageId;
+  }
   const isVoice = body?.voiceDurationMs !== undefined;
   const durationMs = isVoice ? Number(body.voiceDurationMs) : null;
   const audioType = file ? detectAudioType(file.buffer, file.mimetype) : null;

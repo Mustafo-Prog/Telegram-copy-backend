@@ -53,11 +53,19 @@ async function findOrCreateDirect(userId, peerId) {
   }
 }
 
+async function findOrCreateSaved(userId) {
+  const open = () => Conversation.findOneAndUpdate({ directKey: `saved:${userId}` }, {
+    $setOnInsert: { kind: 'saved', participants: [userId], directKey: `saved:${userId}`, lastMessageText: '' },
+  }, { upsert: true, new: true, setDefaultsOnInsert: true });
+  try { return await open(); }
+  catch (err) { if (err.code === 11000) return open(); throw err; }
+}
+
 // Последнее сообщение, которое видит именно этот пользователь (учитывает «удалить у меня» и очистку)
 async function previewFor(conversationId, userId) {
   const filter = await visibilityFilter(conversationId, userId);
   const last = await Message.findOne(filter).sort({ _id: -1 });
-  return last ? { text: last.text || last.attachment?.name || '', at: last.sentAt, type: last.text ? 'text' : last.attachment?.kind ?? 'file' } : { text: '', at: null };
+  return last ? { id: String(last._id), text: last.text || last.attachment?.name || '', at: last.sentAt, type: last.text ? 'text' : last.attachment?.kind ?? 'file' } : { text: '', at: null };
 }
 
 // Ошибка для контроллера: статус и код API
@@ -70,8 +78,10 @@ class ChatGoneError extends Error {
 }
 
 async function listForUser(userId) {
-  const hiddenIds = await ConversationState.distinct('conversation', { user: userId, hidden: true });
-  const pinnedIds = await ConversationState.distinct('conversation', { user: userId, pinnedAt: { $ne: null } });
+  const [hiddenIds, pinnedIds] = await Promise.all([
+    ConversationState.distinct('conversation', { user: userId, hidden: true }),
+    ConversationState.distinct('conversation', { user: userId, pinnedAt: { $ne: null } }),
+  ]);
   const recent = await Conversation.find({ participants: userId, _id: { $nin: hiddenIds } })
     .sort({ lastMessageAt: -1 })
     .limit(100)
@@ -82,9 +92,10 @@ async function listForUser(userId) {
 }
 
 // Диалог только для его участников; чужой или несуществующий — null
-async function getForUser(conversationId, userId) {
+async function getForUser(conversationId, userId, { populate = false } = {}) {
   if (!mongoose.isValidObjectId(conversationId)) return null;
-  return Conversation.findOne({ _id: conversationId, participants: userId }).populate('participants', PEER_FIELDS);
+  const query = Conversation.findOne({ _id: conversationId, participants: userId });
+  return populate ? query.populate('participants', PEER_FIELDS) : query;
 }
 
 async function listMessages(conversationId, userId, { before } = {}) {
@@ -96,7 +107,7 @@ async function listMessages(conversationId, userId, { before } = {}) {
   return docs.reverse();
 }
 
-async function createMessage(conversation, senderId, text, content = {}) {
+async function createMessage(conversation, senderId, text, content = {}, sender = null) {
   const message = await Message.create({ ...content, sender: senderId, text, conversation: conversation._id });
   // Диалог могли удалить «у обоих» между проверкой доступа и записью: не оставляем сиротское сообщение
   if (!(await Conversation.exists({ _id: conversation._id, participants: senderId }))) {
@@ -104,27 +115,30 @@ async function createMessage(conversation, senderId, text, content = {}) {
     throw new ChatGoneError();
   }
   // Новое сообщение возвращает чат тем, кто его скрыл (история, очищенная ими ранее, не вернётся)
-  await ConversationState.updateMany({ conversation: conversation._id }, { hidden: false });
-  await Conversation.updateOne(
-    { _id: conversation._id },
-    { lastMessageAt: message.sentAt, lastMessageText: text || message.attachment?.name || '' }
-  );
+  await Promise.all([
+    ConversationState.updateMany({ conversation: conversation._id }, { hidden: false }),
+    Conversation.updateOne({ _id: conversation._id },
+      { lastMessageAt: message.sentAt, lastMessageText: text || message.attachment?.name || '' }),
+  ]);
+  // The authenticated sender is already loaded for this request.
+  if (sender) { message.sender = sender; return message; }
   return message.populate('sender', PEER_FIELDS);
 }
 
 // Собеседник и превью — свои для каждого участника. Статус собеседника — с учетом его настройки
 function buildConversationDto(conversation, userId, preview, unreadCount = 0, peerLastReadMessageId = null, pinnedAt = null) {
   const isGroup = conversation.kind === 'group';
+  const isSaved = conversation.kind === 'saved';
   const peer = conversation.participants.find((p) => String(p._id) !== String(userId));
   return {
     id: conversation._id.toString(),
-    kind: isGroup ? 'group' : 'direct',
+    kind: isSaved ? 'saved' : isGroup ? 'group' : 'direct',
     title: isGroup ? conversation.title : null,
     memberCount: conversation.participants.length,
     ownerId: isGroup ? String(conversation.owner) : null,
     adminIds: isGroup ? (conversation.admins ?? []).map(String) : [],
     pinnedAt: pinnedAt ? new Date(pinnedAt).toISOString() : null,
-    peer: !isGroup && peer
+    peer: !isGroup && !isSaved && peer
       ? {
           id: peer._id.toString(),
           displayName: peer.displayName,
@@ -135,6 +149,7 @@ function buildConversationDto(conversation, userId, preview, unreadCount = 0, pe
         }
       : null,
     lastMessageText: preview.text,
+    lastMessageId: preview.id ?? null,
     lastMessageType: preview.type ?? 'text',
     lastMessageAt: (preview.at ?? conversation.createdAt ?? new Date()).toISOString(),
     unreadCount,
@@ -143,16 +158,25 @@ function buildConversationDto(conversation, userId, preview, unreadCount = 0, pe
 }
 
 async function toConversationDto(conversation, userId) {
-  const preview = await previewFor(conversation._id, userId);
-  const ownState = await ConversationState.findOne({ conversation: conversation._id, user: userId });
-  const peerLastReadMessageId = await peerReadCursor(conversation, userId);
-  const filter = await visibilityFilter(conversation._id, userId);
-  if (ownState?.lastReadMessageId) filter._id.$gt = ownState.lastReadMessageId;
-  const unreadCount = await Message.countDocuments({ ...filter, sender: { $ne: userId } });
+  const [ownState, hiddenIds, peerLastReadMessageId] = await Promise.all([
+    ConversationState.findOne({ conversation: conversation._id, user: userId }),
+    MessageHide.distinct('message', { conversation: conversation._id, user: userId }),
+    peerReadCursor(conversation, userId),
+  ]);
+  const filter = { conversation: conversation._id, sentAt: { $gt: ownState?.clearedBefore ?? EPOCH }, _id: { $nin: hiddenIds } };
+  const unreadFilter = { ...filter, _id: { ...filter._id }, sender: { $ne: userId } };
+  if (ownState?.lastReadMessageId) unreadFilter._id.$gt = ownState.lastReadMessageId;
+  const [last, unreadCount] = await Promise.all([
+    Message.findOne(filter).sort({ _id: -1 }),
+    conversation.kind === 'saved' ? 0 : Message.countDocuments(unreadFilter),
+  ]);
+  const preview = last ? { id: String(last._id), text: last.text || last.attachment?.name || '', at: last.sentAt,
+    type: last.text ? 'text' : last.attachment?.kind ?? 'file' } : { text: '', at: null };
   return buildConversationDto(conversation, userId, preview, unreadCount, peerLastReadMessageId, ownState?.pinnedAt);
 }
 
 async function peerReadCursor(conversation, userId, knownStates) {
+  if (conversation.kind === 'saved') return null;
   const peers = conversation.participants.map((p) => String(p._id ?? p)).filter((id) => id !== String(userId));
   const states = knownStates ?? await ConversationState.find({ conversation: conversation._id, user: { $in: peers } });
   return states.filter((state) => String(state.conversation) === String(conversation._id) && peers.includes(String(state.user)))
@@ -164,8 +188,10 @@ async function listDtosForUser(userId) {
   const docs = await listForUser(userId);
   if (docs.length === 0) return [];
   const ids = docs.map((c) => c._id);
-  const states = await ConversationState.find({ conversation: { $in: ids } });
-  const hides = await MessageHide.find({ conversation: { $in: ids }, user: userId });
+  const [states, hides] = await Promise.all([
+    ConversationState.find({ conversation: { $in: ids } }),
+    MessageHide.find({ conversation: { $in: ids }, user: userId }),
+  ]);
 
   const stateByConversation = new Map(states.filter((st) => String(st.user) === String(userId)).map((st) => [String(st.conversation), st]));
   const hiddenByConversation = new Map();
@@ -184,11 +210,13 @@ async function listDtosForUser(userId) {
         sentAt: { $gt: state?.clearedBefore ?? EPOCH },
         _id: { $nin: hiddenByConversation.get(key) ?? [] },
       };
-      const last = await Message.findOne(filter).sort({ _id: -1 });
-      const preview = last ? { text: last.text || last.attachment?.name || '', at: last.sentAt, type: last.text ? 'text' : last.attachment?.kind ?? 'file' } : { text: '', at: null };
       const unreadFilter = { ...filter, sender: { $ne: userId }, _id: { ...filter._id } };
       if (state?.lastReadMessageId) unreadFilter._id.$gt = state.lastReadMessageId;
-      const unreadCount = await Message.countDocuments(unreadFilter);
+      const [last, unreadCount] = await Promise.all([
+        Message.findOne(filter).sort({ _id: -1 }),
+        c.kind === 'saved' ? 0 : Message.countDocuments(unreadFilter),
+      ]);
+      const preview = last ? { id: String(last._id), text: last.text || last.attachment?.name || '', at: last.sentAt, type: last.text ? 'text' : last.attachment?.kind ?? 'file' } : { text: '', at: null };
       const cursor = await peerReadCursor(c, userId, states);
       return buildConversationDto(c, userId, preview, unreadCount, cursor, state?.pinnedAt);
     })
@@ -198,13 +226,14 @@ async function listDtosForUser(userId) {
 }
 
 async function getDtoForUser(conversationId, userId) {
-  const doc = await getForUser(conversationId, userId);
+  const doc = await getForUser(conversationId, userId, { populate: true });
   return doc ? toConversationDto(doc, userId) : null;
 }
 
 module.exports = {
   PAGE_SIZE,
   findOrCreateDirect,
+  findOrCreateSaved,
   listForUser,
   getForUser,
   listMessages,

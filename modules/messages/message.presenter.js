@@ -6,10 +6,15 @@ function toMessageDto(message) {
     senderUsername: message.sender?.username ?? null,
     senderAvatarUrl: message.sender?.avatarUrl ?? null,
     conversationId: message.conversation?.toString() ?? null,
+    clientMessageId: message.clientMessageId ?? null,
     text: message.text,
     createdAt: message.sentAt.toISOString(),
     editedAt: message.editedAt ? message.editedAt.toISOString() : null,
     replyTo: message.replyTo ? { id: String(message.replyTo) } : null,
+    savedFrom: message.savedFrom ? {
+      senderName: message.savedFrom.senderName ?? null,
+      createdAt: message.savedFrom.createdAt ? new Date(message.savedFrom.createdAt).toISOString() : null,
+    } : null,
     attachment: message.attachment ? {
       name: message.attachment.name,
       contentType: message.attachment.contentType,

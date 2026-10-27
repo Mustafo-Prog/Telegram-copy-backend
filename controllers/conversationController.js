@@ -59,7 +59,7 @@ async function sendMessage(req, res, next) {
 
     const content = await prepareContent({ conversationId: conversation._id, userId: req.user._id, body: req.body, file: req.file });
 
-    const message = await conversations.createMessage(conversation, req.user._id, content.text, content);
+    const message = await conversations.createMessage(conversation, req.user._id, content.text, content, req.user);
     const dto = toMessageDto(message);
     const current = await conversations.getForUser(conversation._id, req.user._id);
     realtime.toUsers(current?.participants ?? [], 'message:new', {
@@ -111,10 +111,11 @@ async function pin(req, res, next) {
     if (typeof req.body?.pinned !== 'boolean') return fail(res, 400, 'invalid_data', 'Некорректное значение');
     const conversation = await conversations.getForUser(req.params.id, req.user._id);
     if (!conversation) return fail(res, 404, 'conversation_not_found', 'Диалог не найден');
-    await ConversationState.findOneAndUpdate({ conversation: conversation._id, user: req.user._id },
+    const state = await ConversationState.findOneAndUpdate({ conversation: conversation._id, user: req.user._id },
       { pinnedAt: req.body.pinned ? new Date() : null }, { upsert: true, new: true });
-    realtime.toUsers([req.user._id], 'chat:changed', { conversationId: String(conversation._id), reason: 'pin' });
-    res.json({ conversation: await conversations.getDtoForUser(conversation._id, req.user._id) });
+    const pinnedAt = state.pinnedAt ? new Date(state.pinnedAt).toISOString() : null;
+    realtime.toUsers([req.user._id], 'chat:changed', { conversationId: String(conversation._id), reason: 'pin', pinnedAt });
+    res.json({ conversation: { id: String(conversation._id), pinnedAt } });
   } catch (err) { next(err); }
 }
 

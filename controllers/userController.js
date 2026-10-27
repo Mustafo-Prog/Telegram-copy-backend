@@ -139,8 +139,7 @@ async function updatePrivacy(req, res, next) {
 async function pinGeneral(req, res, next) {
   try {
     if (typeof req.body?.pinned !== 'boolean') return sendError(res, 400, 'invalid_data');
-    await User.updateOne({ _id: req.user._id }, { generalPinnedAt: req.body.pinned ? new Date() : null });
-    const user = await User.findById(req.user._id);
+    const user = await User.findOneAndUpdate({ _id: req.user._id }, { generalPinnedAt: req.body.pinned ? new Date() : null }, { new: true });
     require('../services/realtime').toUsers([user._id], 'preferences:changed', { generalPinnedAt: user.generalPinnedAt ? new Date(user.generalPinnedAt).toISOString() : null });
     res.json({ user: user.toPublic() });
   } catch (err) { next(err); }
