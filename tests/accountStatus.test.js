@@ -33,7 +33,8 @@ before(async () => {
   for (let i = 0; i < 50; i++) { try { if ((await fetch(BASE + '/health')).ok) break; } catch {} await pause(30); }
   [regular, premium, owner, secondOwner] = await Promise.all([
     ['ordinary', 'user'], ['premium', 'admin'], ['owner', 'superadmin'], ['second_owner', 'superadmin'],
-  ].map(([name, status]) => User.create({ email: `${name}@status.test`, displayName: name, username: name, status })));
+  ].map(([name, status]) => User.create({ email: `${name}@status.test`, displayName: name, username: name, status,
+    ...(status === 'admin' ? { premiumExpiresAt: new Date(Date.now() + 30 * 86400000) } : {}) })));
   [u, p, s, otherS] = [regular, premium, owner, secondOwner].map(signToken);
 });
 after(() => sockets.forEach((socket) => socket.close()));
@@ -113,8 +114,9 @@ test('promotions notify the target and update public profiles without exposing e
   const publicEvent = new Promise((resolve) => observer.once('user:updated', resolve));
   const response = await promote(String(target._id));
   assert.equal(response.status, 200);
-  assert.deepEqual(await ownEvent, { userId: String(target._id), status: 'admin' });
-  assert.deepEqual(await publicEvent, { userId: String(target._id), status: 'admin' });
+  const expected = { userId: String(target._id), status: 'admin', premiumExpiresAt: response.data.user.premiumExpiresAt, premiumVersion: 1 };
+  assert.deepEqual(await ownEvent, expected);
+  assert.deepEqual(await publicEvent, expected);
   const profile = (await call('GET', `/users/by-id/${target._id}`, u)).data.user;
   assert.equal(profile.status, 'admin'); assert.equal(profile.username, null); assert.equal(Object.hasOwn(profile, 'email'), false);
   assert.equal((await call('GET', `/users/by-id/${target._id}`, null)).status, 401);

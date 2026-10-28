@@ -39,11 +39,13 @@ async function start() {
   }
   assertMailConfig();
   await connectDB();
+  const stopPremiumMaintenance = await require('./services/premiumSubscriptions').startPremiumMaintenance();
 
   const server = httpServer.listen(PORT, () => console.log(`API: http://localhost:${PORT}`));
 
   const shutdown = async (signal) => {
     console.log(`${signal}: останавливаем сервер`);
+    stopPremiumMaintenance();
     server.close();
     await mongoose.connection.close();
     process.exit(0);

@@ -4,7 +4,7 @@ const { ConversationState } = require('../models/ConversationState');
 const { GeneralReadState } = require('../models/GeneralReadState');
 const conversations = require('../services/conversationService');
 const { REACTION_EMOJIS, reactionSummary } = require('../services/reactions');
-const { accountStatus } = require('../utils/accountStatus');
+const { accountDetails } = require('../utils/accountStatus');
 const { apiError } = require('../utils/apiError');
 const realtime = require('../services/realtime');
 
@@ -65,10 +65,10 @@ async function readers(req, res, next) {
       filter.user.$in = conversation.participants;
     }
     const states = await (conversation ? ConversationState : GeneralReadState).find(filter)
-      .populate('user', 'displayName username avatarUrl status');
+      .populate('user', 'displayName username avatarUrl status premiumExpiresAt premiumVersion');
     const users = states.filter((state) => state.user?.displayName).map(({ user }) => ({
       id: String(user._id), displayName: user.displayName, username: user.username ?? null,
-      avatarUrl: user.avatarUrl ?? null, status: accountStatus(user.status),
+      avatarUrl: user.avatarUrl ?? null, ...accountDetails(user),
     }));
     users.sort((a, b) => a.displayName.localeCompare(b.displayName));
     res.json({ messageId: String(message._id), readers: users });

@@ -3,7 +3,7 @@ const { Message } = require('../modules/messages/message.model');
 const { ConversationState } = require('../models/ConversationState');
 const { MessageHide } = require('../models/MessageHide');
 const mongoose = require('mongoose');
-const { accountStatus } = require('../utils/accountStatus');
+const { accountDetails } = require('../utils/accountStatus');
 
 const EPOCH = new Date(0);
 
@@ -22,7 +22,7 @@ async function unhideFor(conversationId, userId) {
 }
 
 const PAGE_SIZE = 50;
-const PEER_FIELDS = 'displayName username avatarUrl privacy lastSeenAt status';
+const PEER_FIELDS = 'displayName username avatarUrl privacy lastSeenAt status premiumExpiresAt premiumVersion';
 const presence = require('./presence');
 
 function directKeyFor(a, b) {
@@ -153,7 +153,7 @@ function buildConversationDto(conversation, userId, preview, unreadCount = 0, pe
       ? {
           id: peer._id.toString(),
           displayName: peer.displayName,
-          status: accountStatus(peer.status),
+          ...accountDetails(peer),
           username: peer.username ?? null,
           avatarUrl: peer.avatarUrl ?? null,
           presence: presence.visibleStatus(peer),

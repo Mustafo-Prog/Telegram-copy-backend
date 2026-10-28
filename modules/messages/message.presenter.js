@@ -1,12 +1,15 @@
-const { accountStatus } = require('../../utils/accountStatus');
+const { accountDetails } = require('../../utils/accountStatus');
 const { reactionSummary } = require('../../services/reactions');
 
 function toMessageDto(message) {
+  const subscription = accountDetails(message.sender);
   return {
     id: message._id.toString(),
     senderId: message.sender?._id?.toString() ?? null,
     senderName: message.sender?.displayName ?? null,
-    senderStatus: accountStatus(message.sender?.status),
+    senderStatus: subscription.status,
+    senderPremiumExpiresAt: subscription.premiumExpiresAt,
+    senderPremiumVersion: subscription.premiumVersion,
     senderUsername: message.sender?.username ?? null,
     senderAvatarUrl: message.sender?.avatarUrl ?? null,
     conversationId: message.conversation?.toString() ?? null,

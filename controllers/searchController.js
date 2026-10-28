@@ -19,7 +19,7 @@ async function search(req, res, next) {
     const regex = new RegExp(literal, 'i');
     filter.$or = [{ text: { $regex: regex } }, { 'attachment.name': { $regex: regex } }];
     if (mongoose.isValidObjectId(req.query.before)) filter._id = { ...filter._id, $lt: req.query.before };
-    const docs = await Message.find(filter).sort({ _id: -1 }).limit(PAGE_SIZE).populate('sender', 'displayName username avatarUrl status');
+    const docs = await Message.find(filter).sort({ _id: -1 }).limit(PAGE_SIZE).populate('sender', 'displayName username avatarUrl status premiumExpiresAt premiumVersion');
     res.json({ messages: await presentMessages(docs, req.user._id), hasMore: docs.length === PAGE_SIZE });
   } catch (err) { next(err); }
 }

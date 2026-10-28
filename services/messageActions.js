@@ -8,7 +8,7 @@ const { validateMessageInput } = require('../modules/messages/message.schema');
 // Все операции здесь проверяют права. Контекст: conversationId === null — общий чат,
 // иначе — личный диалог (проверку участника делает контроллер).
 const BULK_LIMIT = 100;
-const PEER_FIELDS = 'displayName username avatarUrl status';
+const PEER_FIELDS = 'displayName username avatarUrl status premiumExpiresAt premiumVersion';
 
 class ActionError extends Error {
   constructor(status, code, message) {
