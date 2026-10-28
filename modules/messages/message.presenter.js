@@ -1,12 +1,18 @@
+const { accountStatus } = require('../../utils/accountStatus');
+const { reactionSummary } = require('../../services/reactions');
+
 function toMessageDto(message) {
   return {
     id: message._id.toString(),
     senderId: message.sender?._id?.toString() ?? null,
     senderName: message.sender?.displayName ?? null,
+    senderStatus: accountStatus(message.sender?.status),
     senderUsername: message.sender?.username ?? null,
     senderAvatarUrl: message.sender?.avatarUrl ?? null,
     conversationId: message.conversation?.toString() ?? null,
     clientMessageId: message.clientMessageId ?? null,
+    reactions: reactionSummary(message.reactions),
+    reactionsVersion: message.reactionsVersion ?? 0,
     text: message.text,
     createdAt: message.sentAt.toISOString(),
     editedAt: message.editedAt ? message.editedAt.toISOString() : null,

@@ -8,7 +8,7 @@ const { validateMessageInput } = require('../modules/messages/message.schema');
 // Все операции здесь проверяют права. Контекст: conversationId === null — общий чат,
 // иначе — личный диалог (проверку участника делает контроллер).
 const BULK_LIMIT = 100;
-const PEER_FIELDS = 'displayName username avatarUrl';
+const PEER_FIELDS = 'displayName username avatarUrl status';
 
 class ActionError extends Error {
   constructor(status, code, message) {
@@ -76,11 +76,11 @@ async function editMessage({ conversationId, messageId, userId, text }) {
   return Message.findOne({ _id: message._id }).populate('sender', PEER_FIELDS);
 }
 
-async function deleteMessage({ conversationId, messageId, userId, mode = 'me', canDeleteOthers = true }) {
+async function deleteMessage({ conversationId, messageId, userId, mode = 'me', canDeleteOthers = true, canDeleteGeneralOthers = false }) {
   const message = await findMessage(conversationId, messageId);
 
   if (conversationId === null) {
-    if (String(message.sender) !== String(userId)) {
+    if (!canDeleteGeneralOthers && String(message.sender) !== String(userId)) {
       throw new ActionError(403, 'forbidden', 'Удалять можно только свои сообщения');
     }
     await hardDelete([message._id], null);
@@ -100,13 +100,14 @@ async function deleteMessage({ conversationId, messageId, userId, mode = 'me', c
   return { deleted: 1, skipped: 0, deletedIds: [String(message._id)] };
 }
 
-async function bulkDelete({ conversationId, ids, userId, mode = 'everyone', canDeleteOthers = true }) {
+async function bulkDelete({ conversationId, ids, userId, mode = 'everyone', canDeleteOthers = true, canDeleteGeneralOthers = false }) {
   const list = assertIds(ids);
 
   if (conversationId === null) {
     if (mode !== 'everyone') throw new ActionError(400, 'mode_not_allowed', 'В общем чате удаление только для всех');
-    // В общем чате удаляются только свои сообщения; чужие пропускаются
-    const own = await Message.find({ _id: { $in: list }, conversation: null, sender: userId });
+    // Account Premium does not grant moderation. Only an explicit trusted
+    // superadmin decision from the controller can include other authors.
+    const own = await Message.find({ _id: { $in: list }, conversation: null, ...(canDeleteGeneralOthers ? {} : { sender: userId }) });
     const ownIds = own.map((m) => m._id);
     await hardDelete(ownIds, null);
     return { deleted: ownIds.length, skipped: list.length - ownIds.length, deletedIds: ownIds.map(String) };

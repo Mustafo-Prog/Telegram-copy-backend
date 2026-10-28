@@ -93,6 +93,14 @@ function applyUpdate(model, d, update, isInsert) {
     if (isInsert && update.$setOnInsert) Object.assign(d, update.$setOnInsert);
     if (update.$unset) for (const k of Object.keys(update.$unset)) delete d[k];
     if (update.$inc) for (const [k, value] of Object.entries(update.$inc)) d[k] = (d[k] ?? 0) + value;
+    if (update.$addToSet) for (const [k, value] of Object.entries(update.$addToSet)) {
+      const list = d[k] ?? [];
+      const same = (entry) => value && typeof value === 'object' && !isOid(value) ? matches(entry, value) : eq(entry, value);
+      d[k] = list.some(same) ? [...list] : [...list, value];
+    }
+    if (update.$pull) for (const [k, value] of Object.entries(update.$pull)) {
+      d[k] = (d[k] ?? []).filter((entry) => !(value && typeof value === 'object' && !isOid(value) ? matches(entry, value) : eq(entry, value)));
+    }
     if (update.$max) for (const [k, v] of Object.entries(update.$max)) {
       if (d[k] == null || cmp(norm(d[k]), norm(v)) < 0) d[k] = v;
     }

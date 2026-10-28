@@ -11,6 +11,8 @@ router.get('/', controller.list);
 router.get('/search', require('../../controllers/searchController').search);
 router.post('/', uploadAttachment, controller.create);
 router.post('/read', controller.markRead);
+router.get('/:id/readers', require('../../controllers/messageInteractionsController').readers);
+router.put('/:id/reactions', require('../../controllers/messageInteractionsController').setReaction);
 router.get('/:id/attachment', getAttachment);
 router.post('/bulk-delete', actions.bulkDeleteGeneral);
 router.patch('/:id', actions.editGeneral);

@@ -5,6 +5,7 @@ const { toMessageDto, presentMessage } = require('../modules/messages/message.pr
 const { apiError } = require('../utils/apiError');
 const realtime = require('../services/realtime');
 const groups = require('../services/groupService');
+const { isSuperadmin } = require('../utils/accountStatus');
 
 function fail(res, err, next) {
   if (err instanceof actions.ActionError) {
@@ -49,7 +50,8 @@ async function editGeneral(req, res, next) {
 
 async function deleteGeneral(req, res, next) {
   try {
-    const result = await actions.deleteMessage({ conversationId: null, messageId: req.params.id, userId: req.user._id });
+    const result = await actions.deleteMessage({ conversationId: null, messageId: req.params.id, userId: req.user._id,
+      canDeleteGeneralOthers: isSuperadmin(req.user) });
     if (result.deletedIds.length) realtime.toGeneral('message:deleted', { scope: 'general', ids: result.deletedIds });
     res.json(result);
   } catch (err) {
@@ -59,7 +61,8 @@ async function deleteGeneral(req, res, next) {
 
 async function bulkDeleteGeneral(req, res, next) {
   try {
-    const result = await actions.bulkDelete({ conversationId: null, ids: req.body?.ids, userId: req.user._id, mode: req.body?.mode ?? 'everyone' });
+    const result = await actions.bulkDelete({ conversationId: null, ids: req.body?.ids, userId: req.user._id, mode: req.body?.mode ?? 'everyone',
+      canDeleteGeneralOthers: isSuperadmin(req.user) });
     if (result.deletedIds.length) realtime.toGeneral('message:deleted', { scope: 'general', ids: result.deletedIds });
     res.json(result);
   } catch (err) {

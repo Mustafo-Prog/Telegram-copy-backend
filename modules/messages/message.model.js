@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { MESSAGE_MAX_LENGTH } = require('./message.schema');
+const { REACTION_EMOJIS } = require('../../services/reactions');
 
 const messageSchema = new mongoose.Schema(
   {
@@ -13,6 +14,11 @@ const messageSchema = new mongoose.Schema(
     text: { type: String, default: '', required() { return !this.attachment; }, trim: true, maxlength: MESSAGE_MAX_LENGTH },
     replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
     clientMessageId: { type: String, minlength: 1, maxlength: 80, default: null },
+    reactions: { type: [new mongoose.Schema({
+      user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+      emoji: { type: String, enum: REACTION_EMOJIS, required: true },
+    }, { _id: false })], default: [] },
+    reactionsVersion: { type: Number, default: 0 },
     savedFrom: {
       type: new mongoose.Schema({ senderName: String, createdAt: Date }, { _id: false }),
       default: null,

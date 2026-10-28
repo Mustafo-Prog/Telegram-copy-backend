@@ -4,6 +4,7 @@ const avatarStorage = require('../services/avatarStorage');
 const { validateProfile, normalizeUsername, escapeRegex, USERNAME_RE } = require('../schemas/profileSchemas');
 const { apiError } = require('../utils/apiError');
 const presence = require('../services/presence');
+const { accountStatus, isSuperadmin } = require('../utils/accountStatus');
 
 const MESSAGES = {
   privacy_invalid: 'Некорректное значение настройки',
@@ -98,7 +99,7 @@ async function searchUsers(req, res, next) {
       username: { $regex: `^${escapeRegex(query)}` },
       _id: { $ne: req.user._id },
     })
-      .select('displayName username bio avatarUrl privacy lastSeenAt')
+      .select('displayName username bio avatarUrl privacy lastSeenAt status')
       .limit(SEARCH_LIMIT);
 
     res.json({ users: users.map((u) => ({ ...u.toPublicProfile(), presence: presence.visibleStatus(u), lastSeenAt: presence.visiblePresence(u).lastSeenAt })) });
@@ -145,4 +146,28 @@ async function pinGeneral(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { updateMe, uploadMyAvatar, removeMyAvatar, getAvatar, searchUsers, getProfile, updatePrivacy, pinGeneral };
+// A Promote action only grants Premium (admin), never superadmin privileges.
+async function promote(req, res, next) {
+  try {
+    if (!isSuperadmin(req.user)) return res.status(403).json(apiError('superadmin_required', 'Нужен статус superadmin'));
+    if (!mongoose.isValidObjectId(req.params.id)) return sendError(res, 404, 'user_not_found');
+    if (String(req.params.id) === String(req.user._id)) return res.status(403).json(apiError('status_protected', 'Нельзя изменить этот статус'));
+    const promoted = await User.findOneAndUpdate(
+      { _id: req.params.id, $or: [{ status: 'user' }, { status: null }] },
+      { $set: { status: 'admin' } },
+      { new: true, runValidators: true }
+    );
+    const target = promoted ?? await User.findById(req.params.id);
+    if (!target) return sendError(res, 404, 'user_not_found');
+    if (accountStatus(target.status) !== 'admin') return res.status(403).json(apiError('status_protected', 'Нельзя изменить этот статус'));
+    if (promoted) {
+      const realtime = require('../services/realtime');
+      const payload = { userId: String(target._id), status: 'admin' };
+      realtime.toUsers([target._id], 'account:updated', payload);
+      realtime.toGeneral('user:updated', payload);
+    }
+    res.json({ user: target.toPublicProfile() });
+  } catch (err) { next(err); }
+}
+
+module.exports = { updateMe, uploadMyAvatar, removeMyAvatar, getAvatar, searchUsers, getProfile, updatePrivacy, pinGeneral, promote };
