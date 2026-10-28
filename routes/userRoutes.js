@@ -11,6 +11,7 @@ router.get('/:id/avatar', controller.getAvatar);
 router.use(requireAuth);
 // /search раньше /:username, иначе поиск примет за имя пользователя
 router.get('/search', controller.searchUsers);
+router.get('/by-id/:id', controller.getProfileById);
 router.patch('/me', controller.updateMe);
 router.patch('/me/privacy', controller.updatePrivacy);
 router.patch('/me/general-pin', controller.pinGeneral);

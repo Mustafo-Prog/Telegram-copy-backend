@@ -121,6 +121,16 @@ async function getProfile(req, res, next) {
   }
 }
 
+// Profiles opened from messages also work for accounts without a username.
+async function getProfileById(req, res, next) {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return sendError(res, 404, 'user_not_found');
+    const user = await User.findById(req.params.id);
+    if (!user) return sendError(res, 404, 'user_not_found');
+    res.json({ user: { ...user.toPublicProfile(), presence: presence.visibleStatus(user), lastSeenAt: presence.visiblePresence(user).lastSeenAt } });
+  } catch (err) { next(err); }
+}
+
 // Настройка «Показывать мой онлайн». Применяется на сервере: скрытый статус не уходит ни в API, ни в сокеты
 async function updatePrivacy(req, res, next) {
   try {
@@ -170,4 +180,4 @@ async function promote(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { updateMe, uploadMyAvatar, removeMyAvatar, getAvatar, searchUsers, getProfile, updatePrivacy, pinGeneral, promote };
+module.exports = { updateMe, uploadMyAvatar, removeMyAvatar, getAvatar, searchUsers, getProfile, getProfileById, updatePrivacy, pinGeneral, promote };
